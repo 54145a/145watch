@@ -2,9 +2,8 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+    tags:
+      - "v*.*"
 
 jobs:
   build:
@@ -28,6 +27,5 @@ jobs:
 
       - name: Release
         uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
         with:
           files: ${{github.workspace}}/build/Release/*
