@@ -36,7 +36,7 @@ constexpr std::string joinOptions(Option options) {
 }
 
 const std::string HELP_INFO{
-	std::format(R"(Usage: 145watch [options] (<command> | false)
+	std::format(R"(Usage: watch [options] (<command> | false)
 Options:
 	{}	beep if command has a non-zero exit
 	{} <seconds>	seconds to wait between updates, minimum is 0.1
