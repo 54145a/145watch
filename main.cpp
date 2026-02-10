@@ -3,25 +3,23 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <exception>
 #include <format>
 #include <iostream>
+#include <ostream>
 #include <print>
 #include <ranges>
-#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 #ifdef _WIN32
 #include <mmsystem.h>
-#include <process.h>
 #pragma comment(lib, "winmm.lib")
-#else
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #endif
 
 using namespace std::literals;
@@ -29,60 +27,89 @@ using namespace std::literals;
 using Option = std::array<std::string_view, 2>;
 constexpr Option HELP_OPTIONS{"-h", "--help"};
 constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
+constexpr Option INTERVAL_OPTIONS{"-n", "--interval"};
+constexpr Option BEEP_OPTIONS{"-b", "--beep"};
 constexpr std::string joinOptions(Option options) {
 	return std::views::join_with(options, ", ") |
 		   std::ranges::to<std::string>();
 }
 
-const std::string HELP_INFO{std::format(R"(Usage: 145watch [options] command
+const std::string HELP_INFO{
+	std::format(R"(Usage: 145watch [options] command
 Options:
-	{} show help
-	{} run command in precise intervals
+	{}	beep if command has a non-zero exit
+	{}	show help
+	{} <secs>	seconds to wait between updates, minimum is 0.1s.
+	{}	run command in precise intervals
 )",
-										joinOptions(HELP_OPTIONS),
-										joinOptions(PRECISE_OPTIONS))};
+				joinOptions(BEEP_OPTIONS), joinOptions(HELP_OPTIONS),
+				joinOptions(INTERVAL_OPTIONS), joinOptions(PRECISE_OPTIONS))};
 void showHelp() { std::print("{}", HELP_INFO); }
-void showHelpAndExit() {
+void showHelpAndExit(int status = 0) {
 	showHelp();
-	std::exit(0);
+	std::exit(status);
 }
 
-const std::string joinArguments(const char* const argv[]) {
-	std::ostringstream oss;
-	for (const char* const* p = argv; *p != nullptr; ++p) {
-		oss << *p << " ";
-	}
-	return oss.str();
+const std::string joinArguments(const int argc, const char* const argv[]) {
+	return std::views::counted(argv, argc) |
+		   std::views::transform([](const char* arg) {
+			   return std::string_view{arg}.contains(' ')
+						  ? std::format("\"{}\"", arg)
+						  : arg;
+		   }) |
+		   std::views::join_with(std::string_view{" "}) |
+		   std::ranges::to<std::string>();
 }
 
-int execute(char* const argv[]) {
-#ifdef _WIN32
-	return static_cast<int>(_spawnvp(_P_WAIT, argv[0], argv));
-#else
-	pid_t pid;
-	int status;
-	if (posix_spawnp(&pid, argv[0], nullptr, nullptr, argv, environ) != 0)
-		return -1;
-	waitpid(pid, &status, 0);
-	return WEXITSTATUS(status);
-#endif
+int execute(const std::string& command) {
+	if (command.starts_with("false")) {
+		return 1;
+	};
+	return std::system(command.c_str());
 }
 
 int main(int argc, char* argv[]) {
 	if (argc <= 1) showHelpAndExit();
+	bool enableBeep{false};
 	bool isPrecise{false};
 	int index{1};
 	auto interval{2000ms};
-	while (index < argc) {
-		const auto equalToThisArg{
-			[&](std::string_view s) { return s == argv[index]; }};
-		if (std::ranges::any_of(HELP_OPTIONS, equalToThisArg)) {
-			showHelpAndExit();
-		} else if (std::ranges::any_of(PRECISE_OPTIONS, equalToThisArg)) {
-			isPrecise = true;
-		} else
-			break;
-		index++;
+	try {
+		while (index < argc) {
+			if (argv[index][0] != '-') break;
+			const auto equalToThisArg{
+				[&](std::string_view s) { return s == argv[index]; }};
+			if (std::ranges::any_of(HELP_OPTIONS, equalToThisArg)) {
+				showHelpAndExit();
+			} else if (std::ranges::any_of(PRECISE_OPTIONS, equalToThisArg)) {
+				isPrecise = true;
+			} else if (std::ranges::any_of(INTERVAL_OPTIONS, equalToThisArg)) {
+				index++;
+				if (index >= argc) {
+					std::println("Interval option requires an argument.");
+					showHelpAndExit();
+				}
+				double seconds = std::stod(argv[index]);
+				if (seconds <= 0) {
+					throw std::invalid_argument{"Invalid interval."};
+				}
+
+				interval =
+					std::chrono::milliseconds{static_cast<int>(seconds * 1000)};
+				if (interval.count() < 100)
+					throw std::range_error{
+						"Interval too small (or sooooooooooooooooooooooooooooo "
+						"big that it overflowed, unlikely though)."};
+			} else if (std::ranges::any_of(BEEP_OPTIONS, equalToThisArg)) {
+				enableBeep = true;
+			} else
+				throw std::invalid_argument(
+					std::format("Unknown option: {}", argv[index]));
+			index++;
+		}
+	} catch (const std::exception& e) {
+		std::println("Error: {}", e.what());
+		showHelpAndExit(1);
 	}
 	std::signal(SIGINT, [](int signal) {
 		std::println("\nSignal {}", signal);
@@ -91,18 +118,23 @@ int main(int argc, char* argv[]) {
 
 	const std::string message{std::format(
 		"Every {}s: {} ", static_cast<float>(interval.count()) / 1000,
-		joinArguments(argv + index))};
+		joinArguments(argc - index, argv + index))};
 	const auto start{std::chrono::steady_clock::now()};
+
 #ifdef _WIN32
 	timeBeginPeriod(1);
 	std::atexit([]() { timeEndPeriod(1); });
 #endif
+
+	const std::string command{joinArguments(argc - index, argv + index)};
 	for (int count{1};; count++) {
+		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
+		if (enableBeep && execute(command) != 0) {
+			std::cout << '\a' << std::flush;
+		}
 		if (isPrecise)
 			std::this_thread::sleep_until(start + interval * count);
 		else
 			std::this_thread::sleep_for(interval);
-		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
-		execute(argv + index);
 	}
 }
