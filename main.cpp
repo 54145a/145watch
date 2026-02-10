@@ -40,7 +40,7 @@ const std::string HELP_INFO{
 	std::format(R"(Usage: 145watch [options] (<command> | false)
 Options:
 	{}	beep if command has a non-zero exit
-	{} <seconds>	seconds to wait between updates, minimum is 0.1.
+	{} <seconds>	seconds to wait between updates, minimum is 0.1
 	{}	run command in precise intervals
 
 {}	show help and exit
