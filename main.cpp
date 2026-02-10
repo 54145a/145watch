@@ -127,8 +127,10 @@ int main(int argc, char* argv[]) {
 	const auto start{std::chrono::steady_clock::now()};
 
 #ifdef _WIN32
-	timeBeginPeriod(1);
-	std::atexit([]() { timeEndPeriod(1); });
+	if (isPrecise) {
+		timeBeginPeriod(1);
+		std::atexit([]() { timeEndPeriod(1); });
+	}
 #endif
 	std::signal(SIGINT, [](int) { std::exit(0); });
 	for (int count{1};; count++) {
