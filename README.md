@@ -23,3 +23,7 @@ This project uses CMake. See [https://cmake.org/cmake/help/latest/manual/cmake.1
 cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE
 cmake --build build
 ```
+
+Contributions are welcomed.
+
+![not by ai](https://i0.hdslb.com/bfs/new_dyn/10ba44a4a35b7a3d56461ea5358143323546740225476826.png)
