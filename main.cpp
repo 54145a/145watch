@@ -36,7 +36,7 @@ constexpr std::string joinOptions(Option options) {
 		   std::ranges::to<std::string>();
 }
 
-const std::string_view HELP_INFO{
+const std::string HELP_INFO{
 	std::format(R"(Usage: 145watch [options] (<command> | false)
 Options:
 	{}	beep if command has a non-zero exit
