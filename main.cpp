@@ -12,7 +12,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -24,26 +23,32 @@
 
 using namespace std::literals;
 
+constexpr std::string VERSION{"1.0"};
+
 using Option = std::array<std::string_view, 2>;
-constexpr Option HELP_OPTIONS{"-h", "--help"};
 constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
 constexpr Option INTERVAL_OPTIONS{"-n", "--interval"};
 constexpr Option BEEP_OPTIONS{"-b", "--beep"};
+constexpr Option HELP_OPTIONS{"-h", "--help"};
+constexpr Option VERSION_OPTIONS{"-v", "--version"};
 constexpr std::string joinOptions(Option options) {
 	return std::views::join_with(options, ", ") |
 		   std::ranges::to<std::string>();
 }
 
 const std::string HELP_INFO{
-	std::format(R"(Usage: 145watch [options] command
+	std::format(R"(Usage: 145watch [options] (<command> | false)
 Options:
 	{}	beep if command has a non-zero exit
-	{}	show help
-	{} <secs>	seconds to wait between updates, minimum is 0.1s.
+	{} <seconds>	seconds to wait between updates, minimum is 0.1.
 	{}	run command in precise intervals
+
+{}	show help and exit
+{}	show version info and exit
 )",
 				joinOptions(BEEP_OPTIONS), joinOptions(HELP_OPTIONS),
-				joinOptions(INTERVAL_OPTIONS), joinOptions(PRECISE_OPTIONS))};
+				joinOptions(INTERVAL_OPTIONS), joinOptions(PRECISE_OPTIONS),
+				joinOptions(VERSION_OPTIONS))};
 void showHelp() { std::print("{}", HELP_INFO); }
 void showHelpAndExit(int status = 0) {
 	showHelp();
@@ -62,7 +67,7 @@ const std::string joinArguments(const int argc, const char* const argv[]) {
 }
 
 int execute(const std::string& command) {
-	if (command.starts_with("false")) {
+	if (command == "false") {
 		return 1;
 	};
 	return std::system(command.c_str());
@@ -81,6 +86,8 @@ int main(int argc, char* argv[]) {
 				[&](std::string_view s) { return s == argv[index]; }};
 			if (std::ranges::any_of(HELP_OPTIONS, equalToThisArg)) {
 				showHelpAndExit();
+			} else if (std::ranges::any_of(VERSION_OPTIONS, equalToThisArg)) {
+				std::println("145watch by 145a {}", VERSION);
 			} else if (std::ranges::any_of(PRECISE_OPTIONS, equalToThisArg)) {
 				isPrecise = true;
 			} else if (std::ranges::any_of(INTERVAL_OPTIONS, equalToThisArg)) {
