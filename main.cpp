@@ -46,8 +46,8 @@ Options:
 {}	show help and exit
 {}	show version info and exit
 )",
-				joinOptions(BEEP_OPTIONS), joinOptions(HELP_OPTIONS),
-				joinOptions(INTERVAL_OPTIONS), joinOptions(PRECISE_OPTIONS),
+				joinOptions(BEEP_OPTIONS), joinOptions(INTERVAL_OPTIONS),
+				joinOptions(PRECISE_OPTIONS), joinOptions(HELP_OPTIONS),
 				joinOptions(VERSION_OPTIONS))};
 void showHelp() { std::print("{}", HELP_INFO); }
 void showHelpAndExit(int status = 0) {
@@ -60,7 +60,7 @@ const std::string joinArguments(const int argc, const char* const argv[]) {
 		   std::views::transform([](const char* arg) {
 			   return std::string_view{arg}.contains(' ')
 						  ? std::format("\"{}\"", arg)
-						  : arg;
+						  : std::string{arg};
 		   }) |
 		   std::views::join_with(std::string_view{" "}) |
 		   std::ranges::to<std::string>();
@@ -74,7 +74,6 @@ int execute(const std::string& command) {
 }
 
 int main(int argc, char* argv[]) {
-	if (argc <= 1) showHelpAndExit();
 	bool enableBeep{false};
 	bool isPrecise{false};
 	int index{1};
@@ -88,6 +87,7 @@ int main(int argc, char* argv[]) {
 				showHelpAndExit();
 			} else if (std::ranges::any_of(VERSION_OPTIONS, equalToThisArg)) {
 				std::println("145watch by 145a {}", VERSION);
+				return 0;
 			} else if (std::ranges::any_of(PRECISE_OPTIONS, equalToThisArg)) {
 				isPrecise = true;
 			} else if (std::ranges::any_of(INTERVAL_OPTIONS, equalToThisArg)) {
@@ -118,11 +118,9 @@ int main(int argc, char* argv[]) {
 		std::println("Error: {}", e.what());
 		showHelpAndExit(1);
 	}
-	std::signal(SIGINT, [](int signal) {
-		std::println("\nSignal {}", signal);
-		std::exit(0);
-	});
+	if (index == argc) showHelpAndExit();
 
+	const std::string command{joinArguments(argc - index, argv + index)};
 	const std::string message{std::format(
 		"Every {}s: {} ", static_cast<float>(interval.count()) / 1000,
 		joinArguments(argc - index, argv + index))};
@@ -132,16 +130,16 @@ int main(int argc, char* argv[]) {
 	timeBeginPeriod(1);
 	std::atexit([]() { timeEndPeriod(1); });
 #endif
-
-	const std::string command{joinArguments(argc - index, argv + index)};
+	std::signal(SIGINT, [](int) { std::exit(0); });
 	for (int count{1};; count++) {
 		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
 		if (enableBeep && execute(command) != 0) {
 			std::cout << '\a' << std::flush;
 		}
-		if (isPrecise)
+		if (isPrecise) {
 			std::this_thread::sleep_until(start + interval * count);
-		else
+		} else {
 			std::this_thread::sleep_for(interval);
+		}
 	}
 }
