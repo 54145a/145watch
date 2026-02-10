@@ -24,5 +24,4 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v6
       with:
-        name: 145watch
         path: ${{github.workspace}}/build/Release/*
