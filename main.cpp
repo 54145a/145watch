@@ -73,6 +73,13 @@ int execute(const std::string& command) {
 	return std::system(command.c_str());
 }
 
+void beep() {
+#ifdef _WIN32
+	Beep(800, 150);
+#else
+	std::cout << '\a' << std::flush;
+#endif
+}
 int main(int argc, char* argv[]) {
 	bool enableBeep{false};
 	bool isPrecise{false};
@@ -136,7 +143,7 @@ int main(int argc, char* argv[]) {
 	for (int count{1};; count++) {
 		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
 		if (enableBeep && execute(command) != 0) {
-			std::cout << '\a' << std::flush;
+			beep();
 		}
 		if (isPrecise) {
 			std::this_thread::sleep_until(start + interval * count);
