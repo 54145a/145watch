@@ -2,6 +2,8 @@
 
 Metronome for the Windows command line.
 
+[link](https://github.com/54145a/145watch/)
+
 ### Usage
 
 ```
