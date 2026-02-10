@@ -7,7 +7,7 @@ Metronome for the Windows command line.
 ### Usage
 
 ```
-Usage: 145watch [options] (<command> | false)
+Usage: watch [options] (<command> | false)
 Options:
         -b, --beep      beep if command has a non-zero exit
         -n, --interval <seconds>        seconds to wait between updates, minimum is 0.1
