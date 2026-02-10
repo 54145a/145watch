@@ -6,7 +6,6 @@
 #include <exception>
 #include <format>
 #include <iostream>
-#include <ostream>
 #include <print>
 #include <ranges>
 #include <stdexcept>
@@ -75,7 +74,10 @@ int execute(const std::string& command) {
 
 void beep() {
 #ifdef _WIN32
-	Beep(800, 150);
+	std::println("beep");
+	if (!Beep(750, 100)) {
+		std::println("Error {}", GetLastError());
+	}
 #else
 	std::cout << '\a' << std::flush;
 #endif
