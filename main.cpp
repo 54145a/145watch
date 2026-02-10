@@ -23,7 +23,7 @@
 
 using namespace std::literals;
 
-constexpr std::string VERSION{"1.0"};
+constexpr std::string_view VERSION{"1.0"};
 
 using Option = std::array<std::string_view, 2>;
 constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
@@ -36,7 +36,7 @@ constexpr std::string joinOptions(Option options) {
 		   std::ranges::to<std::string>();
 }
 
-const std::string HELP_INFO{
+const std::string_view HELP_INFO{
 	std::format(R"(Usage: 145watch [options] (<command> | false)
 Options:
 	{}	beep if command has a non-zero exit
