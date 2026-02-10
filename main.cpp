@@ -74,10 +74,11 @@ int execute(const std::string& command) {
 
 void beep() {
 #ifdef _WIN32
-	std::println("beep");
-	if (!Beep(750, 100)) {
-		std::println("Error {}", GetLastError());
-	}
+	std::thread([]() {
+		if (!Beep(750, 100)) {
+			std::println("Error {}", GetLastError());
+		}
+	}).detach();
 #else
 	std::cout << '\a' << std::flush;
 #endif
