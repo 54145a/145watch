@@ -22,7 +22,7 @@
 
 using namespace std::literals;
 
-constexpr std::string_view VERSION{"1.1"};
+constexpr std::string_view VERSION{"1.3"};
 
 using Option = std::array<std::string_view, 2>;
 constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
