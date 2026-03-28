@@ -165,7 +165,11 @@ ShellType detectShell() {
 	if (!getEnvString("SHELL").empty()) {
 		return ShellType::POSIX_GENERIC;
 	}
+#ifdef WIN32
 	return ShellType::CMD;
+#else
+	return ShellType::POSIX_GENERIC;
+#endif
 }
 
 int execute(const std::string& command) {
