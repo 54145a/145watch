@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.0)
-project(145watch CXX)
+project(145watch LANGUAGES CXX VERSION 1.4)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_EXTENSIONS off)
 if (MSVC)
@@ -7,4 +7,8 @@ if (MSVC)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
-add_executable(145watch main.cpp)
+
+add_executable(${PROJECT_NAME} main.cpp)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    WATCH_PROJECT_VERSION="${PROJECT_VERSION}"
+)

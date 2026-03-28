@@ -1,11 +1,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <exception>
 #include <format>
 #include <iostream>
+#include <limits>
 #include <print>
 #include <ranges>
 #include <stdexcept>
@@ -13,16 +15,25 @@
 #include <string_view>
 #include <thread>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
+#include <cctype>
+#include <charconv>
 #ifdef _WIN32
 #include <mmsystem.h>
+#include <tlhelp32.h>
 #pragma comment(lib, "winmm.lib")
 #endif
 
 using namespace std::literals;
 
-constexpr std::string_view VERSION{"1.3"};
+#ifndef WATCH_PROJECT_VERSION
+#define WATCH_PROJECT_VERSION "unknown"
+#endif
+constexpr std::string_view VERSION{WATCH_PROJECT_VERSION};
 
 using Option = std::array<std::string_view, 2>;
 constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
@@ -38,12 +49,12 @@ constexpr std::string joinOptions(Option options) {
 const std::string HELP_INFO{
 	std::format(R"(Usage: watch [options] (<command> | false)
 Options:
-	{}	beep if command has a non-zero exit
-	{} <seconds>	seconds to wait between updates, minimum is 0.1
-	{}	run command in precise intervals
+	{} beep if command has a non-zero exit
+	{} <seconds> seconds to wait between updates, minimum is 0.1
+	{} run command in precise intervals
 
-{}	show help and exit
-{}	show version info and exit
+{} show help and exit
+{} show version info and exit
 )",
 				joinOptions(BEEP_OPTIONS), joinOptions(INTERVAL_OPTIONS),
 				joinOptions(PRECISE_OPTIONS), joinOptions(HELP_OPTIONS),
@@ -65,11 +76,128 @@ const std::string joinArguments(const int argc, const char* const argv[]) {
 		   std::ranges::to<std::string>();
 }
 
+enum class ShellType {
+	CMD,
+	POWERSHELL_LEGACY,
+	POWERSHELL,
+	POSIX_GENERIC,
+	POSIX_GITBASH
+};
+
+const std::string getEnvString(const std::string& name) {
+	const char* value = std::getenv(name.c_str());
+	return value ? std::string{value} : std::string{};
+}
+
+#ifdef _WIN32
+static const std::string getGitBashExePathEnvString() {
+	std::string gitExePath = getEnvString("EXEPATH");
+	if (!gitExePath.empty() && gitExePath.back() == '\\') {
+		gitExePath.pop_back();
+	}
+	return gitExePath;
+}
+
+static const std::string getParentProcessName() {
+	DWORD currentPid = GetCurrentProcessId();
+	DWORD parentPid = 0;
+	std::string parentName;
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snapshot == INVALID_HANDLE_VALUE) return "";
+
+	PROCESSENTRY32 pe32;
+	pe32.dwSize = sizeof(PROCESSENTRY32);
+
+	if (Process32First(snapshot, &pe32)) {
+		do {
+			if (pe32.th32ProcessID == currentPid) {
+				parentPid = pe32.th32ParentProcessID;
+				break;
+			}
+		} while (Process32Next(snapshot, &pe32));
+	}
+
+	if (parentPid != 0) {
+		if (Process32First(snapshot, &pe32)) {
+			do {
+				if (pe32.th32ProcessID == parentPid) {
+					parentName = pe32.szExeFile;
+					break;
+				}
+			} while (Process32Next(snapshot, &pe32));
+		}
+	}
+
+	CloseHandle(snapshot);
+
+	if (!parentName.empty()) {
+		std::ranges::transform(parentName, parentName.begin(),
+							   [](unsigned char c) { return std::tolower(c); });
+	}
+	return parentName;
+}
+#endif
+
+const std::string escapeQuotes(const std::string& cmd) {
+	std::string res = cmd;
+	size_t pos = 0;
+	while ((pos = res.find('"', pos)) != std::string::npos) {
+		res.replace(pos, 1, "\\\"");
+		pos += 2;
+	}
+	return res;
+}
+
+ShellType detectShell() {
+#ifdef _WIN32
+	static const std::string parentName = getParentProcessName();
+
+	if (parentName == "powershell.exe") {
+		return ShellType::POWERSHELL_LEGACY;
+	}
+	if (parentName == "pwsh.exe") {
+		return ShellType::POWERSHELL;
+	}
+	if ((!getEnvString("MSYSTEM").empty()) &&
+		(!getGitBashExePathEnvString().empty()))
+		return ShellType::POSIX_GITBASH;
+#endif
+	if (!getEnvString("SHELL").empty()) {
+		return ShellType::POSIX_GENERIC;
+	}
+	return ShellType::CMD;
+}
+
 int execute(const std::string& command) {
 	if (command == "false") {
 		return 1;
 	};
+	// std::println("Executing: {}", command);
 	return std::system(command.c_str());
+}
+
+int executeInShell(const std::string& command, ShellType shellType) {
+	switch (shellType) {
+		case ShellType::POWERSHELL:
+			return execute(std::format("pwsh -Command \"{}\"", command));
+#ifdef WIN32
+		case ShellType::POWERSHELL_LEGACY:
+			return execute(std::format("powershell -Command \"{}\"", command));
+		case ShellType::POSIX_GENERIC: {
+			return execute(std::format("sh -c \"{}\"", escapeQuotes(command)));
+		}
+		case ShellType::POSIX_GITBASH: {
+			static const std::string gitExePath = getGitBashExePathEnvString();
+			if (gitExePath.empty())
+				throw std::runtime_error{
+					"EXEPATH environment variable is not set for Git Bash."};
+			return execute(std::format("\"\"{}\\sh.exe\" -c \"{}\"\"",
+									   gitExePath, escapeQuotes(command)));
+		}
+#endif
+		default:
+			return execute(command);
+	}
 }
 
 void beep() {
@@ -83,6 +211,17 @@ void beep() {
 	std::cout << '\a' << std::flush;
 #endif
 }
+
+static bool parseSecondsArg(const char* arg, double& out) {
+	std::string_view sv{arg};
+	double tmp{};
+	auto res = std::from_chars(sv.data(), sv.data() + sv.size(), tmp);
+	if (res.ec != std::errc() || res.ptr != sv.data() + sv.size()) return false;
+	if (!std::isfinite(tmp) || tmp <= 0.0) return false;
+	out = tmp;
+	return true;
+}
+
 int main(int argc, char* argv[]) {
 	bool enableBeep{false};
 	bool isPrecise{false};
@@ -106,17 +245,27 @@ int main(int argc, char* argv[]) {
 					std::println("Interval option requires an argument.");
 					showHelpAndExit();
 				}
-				double seconds = std::stod(argv[index]);
-				if (seconds <= 0) {
+				const char* arg = argv[index];
+				double seconds{};
+				if (!parseSecondsArg(arg, seconds)) {
 					throw std::invalid_argument{"Invalid interval."};
 				}
 
-				interval =
-					std::chrono::milliseconds{static_cast<int>(seconds * 1000)};
-				if (interval.count() < 100)
+				using ms = std::chrono::milliseconds;
+				const long double max_seconds =
+					static_cast<long double>(
+						std::numeric_limits<ms::rep>::max()) /
+					1000.0L;
+				if (static_cast<long double>(seconds) > max_seconds) {
 					throw std::range_error{
-						"Interval too small (or sooooooooooooooooooooooooooooo "
-						"big that it overflowed, unlikely though)."};
+						"Interval tooooooooo large (would overflow)."};
+				}
+				auto dur = std::chrono::duration<double>(seconds);
+				auto msec = std::chrono::duration_cast<ms>(
+					dur + std::chrono::microseconds(500));
+				if (msec.count() < 100)
+					throw std::range_error{"Interval too small."};
+				interval = msec;
 			} else if (std::ranges::any_of(BEEP_OPTIONS, equalToThisArg)) {
 				enableBeep = true;
 			} else
@@ -130,10 +279,13 @@ int main(int argc, char* argv[]) {
 	}
 	if (index == argc) showHelpAndExit();
 
+	const ShellType shellType = detectShell();
+	std::println("Shell type: {}", static_cast<int>(shellType));
+
 	const std::string command{joinArguments(argc - index, argv + index)};
-	const std::string message{std::format(
-		"Every {}s: {} ", static_cast<float>(interval.count()) / 1000,
-		joinArguments(argc - index, argv + index))};
+	const std::string message{
+		std::format("Every {}s: {} ",
+					static_cast<float>(interval.count()) / 1000, command)};
 	const auto start{std::chrono::steady_clock::now()};
 
 #ifdef _WIN32
@@ -145,7 +297,9 @@ int main(int argc, char* argv[]) {
 	std::signal(SIGINT, [](int) { std::exit(0); });
 	for (int count{1};; count++) {
 		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
-		if (enableBeep && execute(command) != 0) {
+		// Always execute the command and optionally beep on non-zero exit.
+		int rc = executeInShell(command, shellType);
+		if (enableBeep && rc != 0) {
 			beep();
 		}
 		if (isPrecise) {

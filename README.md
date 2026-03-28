@@ -19,14 +19,13 @@ Options:
 
 ### Example
 
-* BPM: 120
 ```powershell
 ./145watch.exe -p -b -n 0.5 false
 ```
 
 ### Build
 
-This project uses CMake. See [https://cmake.org/cmake/help/latest/manual/cmake.1.html](https://cmake.org/cmake/help/latest/manual/cmake.1.html) for more instructions.
+This project uses CMake. See [https://cmake.org/cmake/help/latest/manual/cmake.1.html](https://cmake.org/cmake/help/latest/manual/cmake.1.html) for details.
 
 ```shell
 cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE
