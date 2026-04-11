@@ -28,11 +28,14 @@
 #pragma comment(lib, "winmm.lib")
 #endif
 
+// #include <ncurses.h>
+
 using namespace std::literals;
 
 #ifndef WATCH_PROJECT_VERSION
 #define WATCH_PROJECT_VERSION "unknown"
 #endif
+namespace watch {
 constexpr std::string_view VERSION{WATCH_PROJECT_VERSION};
 
 using Option = std::array<std::string_view, 2>;
@@ -42,8 +45,9 @@ constexpr Option BEEP_OPTIONS{"-b", "--beep"};
 constexpr Option HELP_OPTIONS{"-h", "--help"};
 constexpr Option VERSION_OPTIONS{"-v", "--version"};
 constexpr std::string joinOptions(Option options) {
-	return std::views::join_with(options, ", ") |
-		   std::ranges::to<std::string>();
+	/*return std::views::join_with(options, ", ") |
+		   std::ranges::to<std::string>();**/
+	return std::string(options[0]) + ", " + std::string(options[1]);
 }
 
 const std::string HELP_INFO{
@@ -65,7 +69,7 @@ void showHelpAndExit(int status = 0) {
 	std::exit(status);
 }
 
-const std::string joinArguments(const int argc, const char* const argv[]) {
+/*const std::string joinArguments(const int argc, const char* const argv[]) {
 	return std::views::counted(argv, argc) |
 		   std::views::transform([](const char* arg) {
 			   return std::string_view{arg}.contains(' ')
@@ -74,6 +78,22 @@ const std::string joinArguments(const int argc, const char* const argv[]) {
 		   }) |
 		   std::views::join_with(std::string_view{" "}) |
 		   std::ranges::to<std::string>();
+}*/
+
+const std::string joinArguments(const int argc, const char* const argv[]) {
+	std::ostringstream oss;
+	std::ranges::copy(std::views::counted(argv, argc) |
+						  std::views::transform([](const char* arg) {
+							  return std::string_view{arg}.contains(' ')
+										 ? std::format("\"{}\"", arg)
+										 : std::string{arg};
+						  }),
+					  std::ostream_iterator<std::string>(oss, " "));
+	std::string result = oss.str();
+	if (!result.empty() && result.back() == ' ') {
+		result.pop_back();
+	}
+	return result;
 }
 
 enum class ShellType {
@@ -203,7 +223,7 @@ int executeInShell(const std::string& command, ShellType shellType) {
 			return execute(command);
 	}
 }
-
+/*
 void beep() {
 #ifdef _WIN32
 	std::thread([]() {
@@ -214,7 +234,7 @@ void beep() {
 #else
 	std::cout << '\a' << std::flush;
 #endif
-}
+}*/
 
 static bool parseSecondsArg(const char* arg, double& out) {
 	std::string_view sv{arg};
@@ -225,7 +245,7 @@ static bool parseSecondsArg(const char* arg, double& out) {
 	out = tmp;
 	return true;
 }
-
+}  // namespace watch
 int main(int argc, char* argv[]) {
 	bool enableBeep{false};
 	bool isPrecise{false};
@@ -236,22 +256,25 @@ int main(int argc, char* argv[]) {
 			if (argv[index][0] != '-') break;
 			const auto equalToThisArg{
 				[&](std::string_view s) { return s == argv[index]; }};
-			if (std::ranges::any_of(HELP_OPTIONS, equalToThisArg)) {
-				showHelpAndExit();
-			} else if (std::ranges::any_of(VERSION_OPTIONS, equalToThisArg)) {
-				std::println("145watch by 145a {}", VERSION);
+			if (std::ranges::any_of(watch::HELP_OPTIONS, equalToThisArg)) {
+				watch::showHelpAndExit();
+			} else if (std::ranges::any_of(watch::VERSION_OPTIONS,
+										   equalToThisArg)) {
+				std::println("145watch by 145a {}", watch::VERSION);
 				return 0;
-			} else if (std::ranges::any_of(PRECISE_OPTIONS, equalToThisArg)) {
+			} else if (std::ranges::any_of(watch::PRECISE_OPTIONS,
+										   equalToThisArg)) {
 				isPrecise = true;
-			} else if (std::ranges::any_of(INTERVAL_OPTIONS, equalToThisArg)) {
+			} else if (std::ranges::any_of(watch::INTERVAL_OPTIONS,
+										   equalToThisArg)) {
 				index++;
 				if (index >= argc) {
 					std::println("Interval option requires an argument.");
-					showHelpAndExit();
+					watch::showHelpAndExit();
 				}
 				const char* arg = argv[index];
 				double seconds{};
-				if (!parseSecondsArg(arg, seconds)) {
+				if (!watch::parseSecondsArg(arg, seconds)) {
 					throw std::invalid_argument{"Invalid interval."};
 				}
 
@@ -270,7 +293,8 @@ int main(int argc, char* argv[]) {
 				if (msec.count() < 100)
 					throw std::range_error{"Interval too small."};
 				interval = msec;
-			} else if (std::ranges::any_of(BEEP_OPTIONS, equalToThisArg)) {
+			} else if (std::ranges::any_of(watch::BEEP_OPTIONS,
+										   equalToThisArg)) {
 				enableBeep = true;
 			} else
 				throw std::invalid_argument(
@@ -279,14 +303,14 @@ int main(int argc, char* argv[]) {
 		}
 	} catch (const std::exception& e) {
 		std::println("Error: {}", e.what());
-		showHelpAndExit(1);
+		watch::showHelpAndExit(1);
 	}
-	if (index == argc) showHelpAndExit();
+	if (index == argc) watch::showHelpAndExit();
 
-	const ShellType shellType = detectShell();
+	const watch::ShellType shellType = watch::detectShell();
 	std::println("Shell type: {}", static_cast<int>(shellType));
 
-	const std::string command{joinArguments(argc - index, argv + index)};
+	const std::string command{watch::joinArguments(argc - index, argv + index)};
 	const std::string message{
 		std::format("Every {}s: {} ",
 					static_cast<float>(interval.count()) / 1000, command)};
@@ -301,7 +325,7 @@ int main(int argc, char* argv[]) {
 	std::signal(SIGINT, [](int) { std::exit(0); });
 	for (int count{1};; count++) {
 		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
-		// Always execute the command and optionally beep on non-zero exit.
+		// always execute the command and optionally beep on non-zero exit.
 		int rc = executeInShell(command, shellType);
 		if (enableBeep && rc != 0) {
 			beep();
