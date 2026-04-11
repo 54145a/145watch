@@ -14,9 +14,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+      
       - name: Configure CMake
         run: cmake -B ${{github.workspace}}/build --preset=vcpkg -DCMAKE_BUILD_TYPE=Release
 
