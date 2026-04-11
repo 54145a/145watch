@@ -25,10 +25,9 @@
 #ifdef _WIN32
 #include <mmsystem.h>
 #include <tlhelp32.h>
-#pragma comment(lib, "winmm.lib")
 #endif
 
-// #include <ncurses.h>
+#include <curses.h>
 
 using namespace std::literals;
 
@@ -168,27 +167,27 @@ const std::string escapeQuotes(const std::string& cmd) {
 	return res;
 }
 
-ShellType detectShell() {
+watch::ShellType detectShell() {
 #ifdef _WIN32
-	static const std::string parentName = getParentProcessName();
+	static const std::string parentName = watch::getParentProcessName();
 
 	if (parentName == "powershell.exe") {
-		return ShellType::POWERSHELL_LEGACY;
+		return watch::ShellType::POWERSHELL_LEGACY;
 	}
 	if (parentName == "pwsh.exe") {
-		return ShellType::POWERSHELL;
+		return watch::ShellType::POWERSHELL;
 	}
-	if ((!getEnvString("MSYSTEM").empty()) &&
-		(!getGitBashExePathEnvString().empty()))
-		return ShellType::POSIX_GITBASH;
+	if ((!watch::getEnvString("MSYSTEM").empty()) &&
+		(!watch::getGitBashExePathEnvString().empty()))
+		return watch::ShellType::POSIX_GITBASH;
 #endif
-	if (!getEnvString("SHELL").empty()) {
-		return ShellType::POSIX_GENERIC;
+	if (!watch::getEnvString("SHELL").empty()) {
+		return watch::ShellType::POSIX_GENERIC;
 	}
 #ifdef WIN32
-	return ShellType::CMD;
+	return watch::ShellType::CMD;
 #else
-	return ShellType::POSIX_GENERIC;
+	return watch::ShellType::POSIX_GENERIC;
 #endif
 }
 
@@ -200,17 +199,17 @@ int execute(const std::string& command) {
 	return std::system(command.c_str());
 }
 
-int executeInShell(const std::string& command, ShellType shellType) {
+int executeInShell(const std::string& command, watch::ShellType shellType) {
 	switch (shellType) {
-		case ShellType::POWERSHELL:
+		case watch::ShellType::POWERSHELL:
 			return execute(std::format("pwsh -Command \"{}\"", command));
 #ifdef WIN32
-		case ShellType::POWERSHELL_LEGACY:
+		case watch::ShellType::POWERSHELL_LEGACY:
 			return execute(std::format("powershell -Command \"{}\"", command));
-		case ShellType::POSIX_GENERIC: {
+		case watch::ShellType::POSIX_GENERIC: {
 			return execute(std::format("sh -c \"{}\"", escapeQuotes(command)));
 		}
-		case ShellType::POSIX_GITBASH: {
+		case watch::ShellType::POSIX_GITBASH: {
 			static const std::string gitExePath = getGitBashExePathEnvString();
 			if (gitExePath.empty())
 				throw std::runtime_error{
@@ -269,7 +268,9 @@ int main(int argc, char* argv[]) {
 										   equalToThisArg)) {
 				index++;
 				if (index >= argc) {
-					std::println("Interval option requires an argument.");
+					std::println(
+						"Interval option "
+						"requires an argument.");
 					watch::showHelpAndExit();
 				}
 				const char* arg = argv[index];
@@ -285,7 +286,9 @@ int main(int argc, char* argv[]) {
 					1000.0L;
 				if (static_cast<long double>(seconds) > max_seconds) {
 					throw std::range_error{
-						"Interval tooooooooo large (would overflow)."};
+						"Interval tooooooooo "
+						"large (would "
+						"overflow)."};
 				}
 				auto dur = std::chrono::duration<double>(seconds);
 				auto msec = std::chrono::duration_cast<ms>(
@@ -323,9 +326,13 @@ int main(int argc, char* argv[]) {
 	}
 #endif
 	std::signal(SIGINT, [](int) { std::exit(0); });
+
+	initscr();
+	// TODO: implement TUI
+	endwin();
+
 	for (int count{1};; count++) {
 		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
-		// always execute the command and optionally beep on non-zero exit.
 		int rc = executeInShell(command, shellType);
 		if (enableBeep && rc != 0) {
 			beep();

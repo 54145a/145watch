@@ -1,0 +1,6 @@
+{
+  "dependencies": [
+    "pdcurses"
+  ],
+  "builtin-baseline": "bb4f525cbddd409bdc714ee3043b15ff7766af59"
+}

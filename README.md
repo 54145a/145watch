@@ -25,12 +25,27 @@ Options:
 
 ### Build
 
-This project uses CMake. See [https://cmake.org/cmake/help/latest/manual/cmake.1.html](https://cmake.org/cmake/help/latest/manual/cmake.1.html) for details.
+#### Windows
+
+Requires: vcpkg
 
 ```shell
-cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE
-cmake --build build
+cd build
+cmake .. --preset=vcpkg
+cmake --build .
 ```
+
+#### POSIX
+
+Requires: ncurses
+
+```shell
+cd build
+cmake ..
+cmake --build .
+```
+
+---
 
 Contributions are welcomed.
 
