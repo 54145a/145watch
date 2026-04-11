@@ -25,8 +25,8 @@ jobs:
 
       - name: List build output
         shell: bash
-        run: find ${{github.workspace}}/build -name "*.exe" -type f
-      
+        run: find "${{github.workspace}}/build" -name "*.exe" -type f
+     
       - name: Upload Artifact
         uses: actions/upload-artifact@v6
         with:
