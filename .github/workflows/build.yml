@@ -30,10 +30,10 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v6
         with:
-          path: ${{github.workspace}}/build/*
+          path: ${{github.workspace}}/build/*.exe
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{github.workspace}}/build/*
+          files: ${{github.workspace}}/build/*.exe
 
