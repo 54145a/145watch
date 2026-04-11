@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10.0)
-project(145watch LANGUAGES CXX VERSION 1.4.8)
+project(145watch LANGUAGES CXX VERSION 1.4.9)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_EXTENSIONS off)
 

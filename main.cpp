@@ -184,7 +184,7 @@ watch::ShellType detectShell() {
 	if (!watch::getEnvString("SHELL").empty()) {
 		return watch::ShellType::POSIX_GENERIC;
 	}
-#ifdef WIN32
+#ifdef _WIN32
 	return watch::ShellType::CMD;
 #else
 	return watch::ShellType::POSIX_GENERIC;
