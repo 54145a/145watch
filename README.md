@@ -27,6 +27,7 @@ Options:
 
 #### Windows
 
+Uses pdcurses, vcpkg.json configured.
 Requires: vcpkg
 
 ```shell
