@@ -1,6 +1,10 @@
 ## 145watch
 
-Metronome for the Windows command line.
+> Cross-platform implementation of procps watch
+
+```shell
+winget install 54145a.145watch
+```
 
 [link](https://github.com/54145a/145watch/)
 
@@ -45,6 +49,12 @@ cd build
 cmake ..
 cmake --build .
 ```
+
+### Roadmap
+
+* Basic functionality (80%)
+* TUI (0%)
+* Extended functionality (0%)
 
 ---
 
