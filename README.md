@@ -29,26 +29,13 @@ Options:
 
 ### Build
 
-#### Windows
-
-Uses pdcurses, vcpkg.json configured.
-Requires: vcpkg
-
 ```shell
 cd build
-cmake .. --preset=vcpkg
+cmake .. # add --preset=vcpkg on Windows
 cmake --build .
 ```
 
-#### POSIX
-
-Requires: ncurses
-
-```shell
-cd build
-cmake ..
-cmake --build .
-```
+Windows build
 
 ### Roadmap
 

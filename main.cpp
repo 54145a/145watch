@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -14,6 +15,13 @@
 #include <string>
 #include <string_view>
 #include <thread>
+
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/string.hpp>
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -26,8 +34,6 @@
 #include <mmsystem.h>
 #include <tlhelp32.h>
 #endif
-
-#include <curses.h>
 
 using namespace std::literals;
 
@@ -191,37 +197,60 @@ watch::ShellType detectShell() {
 #endif
 }
 
-int execute(const std::string& command) {
-	if (command == "false") {
-		return 1;
-	};
-	// std::println("Executing: {}", command);
-	return std::system(command.c_str());
-}
-
-int executeInShell(const std::string& command, watch::ShellType shellType) {
-	switch (shellType) {
-		case watch::ShellType::POWERSHELL:
-			return execute(std::format("pwsh -Command \"{}\"", command));
-#ifdef WIN32
-		case watch::ShellType::POWERSHELL_LEGACY:
-			return execute(std::format("powershell -Command \"{}\"", command));
-		case watch::ShellType::POSIX_GENERIC: {
-			return execute(std::format("sh -c \"{}\"", escapeQuotes(command)));
-		}
-		case watch::ShellType::POSIX_GITBASH: {
-			static const std::string gitExePath = getGitBashExePathEnvString();
-			if (gitExePath.empty())
-				throw std::runtime_error{
-					"EXEPATH environment variable is not set for Git Bash."};
-			return execute(std::format("\"\"{}\\sh.exe\" -c \"{}\"\"",
-									   gitExePath, escapeQuotes(command)));
-		}
+struct ExecuteResult {
+	std::string output;
+	int exitCode = 0;
+};
+ExecuteResult execute(const std::string &command) {
+	ExecuteResult result;
+	char buffer[128];
+	std::string full_cmd = command + " 2>&1";
+#ifdef _WIN32
+	FILE *pipe = _popen(full_cmd.c_str(), "r");
+#else
+	FILE *pipe = popen(full_cmd.c_str(), "r");
 #endif
-		default:
-			return execute(command);
+	if (!pipe) {
+		result.output = "Error: Failed to run command.";
+		result.exitCode = -1;
+		return result;
+	}
+	while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+		result.output += buffer;
+	}
+#ifdef _WIN32
+	result.exitCode = _pclose(pipe);
+#else
+	result.exitCode = pclose(pipe);
+#endif
+	return result;
+}
+ExecuteResult executeInShell(const std::string &command,
+							 watch::ShellType shellType) {
+	if (command == "false")
+		return {"", 1};
+	switch (shellType) {
+	case watch::ShellType::POWERSHELL:
+		return execute(std::format("pwsh -Command \"{}\"", command));
+#ifdef _WIN32
+	case watch::ShellType::POWERSHELL_LEGACY:
+		return execute(std::format("powershell -Command \"{}\"", command));
+	case watch::ShellType::POSIX_GENERIC:
+		return execute(std::format("sh -c \"{}\"", escapeQuotes(command)));
+	case watch::ShellType::POSIX_GITBASH: {
+		static const std::string gitExePath = getGitBashExePathEnvString();
+		if (gitExePath.empty())
+			throw std::runtime_error{
+				"EXEPATH environment variable is not set for Git Bash."};
+		return execute(std::format("\"\"{}\\sh.exe\" -c \"{}\"\"", gitExePath,
+								   escapeQuotes(command)));
+	}
+#endif
+	default:
+		return execute(command);
 	}
 }
+
 /*
 void beep() {
 #ifdef _WIN32
@@ -246,6 +275,7 @@ static bool parseSecondsArg(const char* arg, double& out) {
 }
 }  // namespace watch
 int main(int argc, char* argv[]) {
+	using namespace ftxui;
 	bool enableBeep{false};
 	bool isPrecise{false};
 	int index{1};
@@ -327,20 +357,52 @@ int main(int argc, char* argv[]) {
 #endif
 	std::signal(SIGINT, [](int) { std::exit(0); });
 
-	initscr();
-	// TODO: implement TUI
-	endwin();
+	auto screen = ScreenInteractive::Fullscreen();
 
-	for (int count{1};; count++) {
-		std::println("\n{} {:L%c}", message, std::chrono::system_clock::now());
-		int rc = executeInShell(command, shellType);
-		if (enableBeep && rc != 0) {
-			beep();
+	std::string latestCommandOutput{};
+	int latestExitCode = 0;
+	std::mutex dataMutex;
+	std::atomic<bool> loop_started{false};
+	std::thread refreshThread([&]() {
+		while (!loop_started.load(std::memory_order_acquire)) {
+			std::this_thread::sleep_for(1ms);
 		}
-		if (isPrecise) {
-			std::this_thread::sleep_until(start + interval * count);
-		} else {
-			std::this_thread::sleep_for(interval);
+		int count{1};
+		while (true) {
+			auto result = watch::executeInShell(command, shellType);
+			{
+				std::lock_guard<std::mutex> lock(dataMutex);
+				latestCommandOutput = result.output;
+				latestExitCode = result.exitCode;
+			}
+			if (enableBeep && latestExitCode != 0) {
+				std::cout << '\a' << std::flush;
+			}
+			screen.PostEvent(Event::Custom);
+			if (isPrecise) {
+				std::this_thread::sleep_until(start + interval * count);
+			} else {
+				std::this_thread::sleep_for(interval);
+			}
+			count++;
 		}
-	}
+	});
+	refreshThread.detach();
+	screen.Loop(Renderer([&]() {
+		loop_started.store(true, std::memory_order_release);
+		std::string safeOutput;
+		{
+			std::lock_guard<std::mutex> lock(dataMutex);
+			safeOutput = latestCommandOutput;
+		}
+		auto header_right =
+			vbox({text(std::format("{:L%c}",
+								   std::chrono::zoned_time{
+									   std::chrono::current_zone(),
+									   std::chrono::system_clock::now()})),
+				  text(std::format("in 0.0XXs"))});
+		auto header = hbox({text(message), filler(), header_right});
+		auto body = vbox({text(""), text(safeOutput)});
+		return vbox({header, body});
+	}));
 }

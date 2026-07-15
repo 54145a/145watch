@@ -1,6 +1,6 @@
 {
-  "dependencies": [
-    "pdcurses"
-  ],
-  "builtin-baseline": "bb4f525cbddd409bdc714ee3043b15ff7766af59"
+    "builtin-baseline": "97b19caab97ab0c8d36c93230046c8c45fcd41d0",
+    "dependencies": [
+        "ftxui"
+    ]
 }
