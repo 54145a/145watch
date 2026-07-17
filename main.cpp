@@ -8,9 +8,12 @@
 #include <exception>
 #include <format>
 #include <iostream>
+#include <iterator>
 #include <limits>
+#include <mutex>
 #include <print>
 #include <ranges>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -28,8 +31,6 @@
 #endif
 #include <windows.h>
 #endif
-#include <cctype>
-#include <charconv>
 #ifdef _WIN32
 #include <mmsystem.h>
 #include <tlhelp32.h>
@@ -274,6 +275,8 @@ static bool parseSecondsArg(const char* arg, double& out) {
 	return true;
 }
 }  // namespace watch
+
+static std::sig_atomic_t stop_requested = 0;
 int main(int argc, char* argv[]) {
 	using namespace ftxui;
 	bool enableBeep{false};
@@ -355,54 +358,88 @@ int main(int argc, char* argv[]) {
 		std::atexit([]() { timeEndPeriod(1); });
 	}
 #endif
-	std::signal(SIGINT, [](int) { std::exit(0); });
+	std::signal(SIGINT, [](int) { stop_requested = 1; });
 
 	auto screen = ScreenInteractive::Fullscreen();
 
-	std::string latestCommandOutput{};
-	int latestExitCode = 0;
+	std::string latestCommandOutput_{};
+	int lastExitCode_ = 0;
 	std::mutex dataMutex;
 	std::atomic<bool> loop_started{false};
+	std::chrono::time_point<std::chrono::steady_clock> lastBeginTime_,
+		lastFinishTime_;
 	std::thread refreshThread([&]() {
-		while (!loop_started.load(std::memory_order_acquire)) {
+		while (!loop_started.load(std::memory_order_acquire) &&
+			   stop_requested == 0) {
 			std::this_thread::sleep_for(1ms);
 		}
+		if (stop_requested) {
+			screen.ExitLoopClosure()();
+			return;
+		}
 		int count{1};
-		while (true) {
+		while (stop_requested == 0) {
+			auto begin = std::chrono::steady_clock::now();
 			auto result = watch::executeInShell(command, shellType);
+			auto finish = std::chrono::steady_clock::now();
 			{
 				std::lock_guard<std::mutex> lock(dataMutex);
-				latestCommandOutput = result.output;
-				latestExitCode = result.exitCode;
-			}
-			if (enableBeep && latestExitCode != 0) {
-				std::cout << '\a' << std::flush;
+				latestCommandOutput_ = result.output;
+				lastExitCode_ = result.exitCode;
+				lastBeginTime_ = begin;
+				lastFinishTime_ = finish;
 			}
 			screen.PostEvent(Event::Custom);
+			if (enableBeep && result.exitCode != 0) {
+				std::cout << '\a' << std::flush;
+			}
 			if (isPrecise) {
 				std::this_thread::sleep_until(start + interval * count);
 			} else {
 				std::this_thread::sleep_for(interval);
 			}
-			count++;
+			++count;
 		}
+		screen.ExitLoopClosure()();
 	});
-	refreshThread.detach();
 	screen.Loop(Renderer([&]() {
+		if (stop_requested) {
+			screen.ExitLoopClosure()();
+			return text("Exiting...");
+		}
 		loop_started.store(true, std::memory_order_release);
-		std::string safeOutput;
+		std::string cmdOutput;
+		int exitCode;
+		double durationSec;
 		{
 			std::lock_guard<std::mutex> lock(dataMutex);
-			safeOutput = latestCommandOutput;
+			cmdOutput = latestCommandOutput_;
+			exitCode = lastExitCode_;
+			durationSec =
+				std::chrono::duration<double>(lastFinishTime_ - lastBeginTime_)
+					.count();
 		}
-		auto header_right =
-			vbox({text(std::format("{:L%c}",
-								   std::chrono::zoned_time{
-									   std::chrono::current_zone(),
-									   std::chrono::system_clock::now()})),
-				  text(std::format("in 0.0XXs"))});
-		auto header = hbox({text(message), filler(), header_right});
-		auto body = vbox({text(""), text(safeOutput)});
-		return vbox({header, body});
+		auto header_right = vbox({
+
+			text(
+				std::format(
+					"{:L%c}",
+					std::chrono::zoned_time{
+						std::chrono::current_zone(),
+						std::chrono::system_clock::now()
+					}
+				)
+			),
+			text(std::format("in {:.3f}s ({})", durationSec, exitCode)) |
+				align_right
+		});
+
+		auto header{vbox({
+			hbox({text(message), filler(), header_right}),
+		})};
+		return vbox({header, text(cmdOutput)});
 	}));
+	if (refreshThread.joinable()) {
+		refreshThread.join();
+	}
 }
