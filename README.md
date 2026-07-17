@@ -31,7 +31,7 @@ Options:
 
 ```shell
 cd build
-cmake .. # add --preset=vcpkg on Windows
+cmake .. # For Windows, use vcpkg (https://learn.microsoft.com/en-us/vcpkg/get_started/get-started)
 cmake --build .
 ```
 
