@@ -120,7 +120,7 @@ class Synchronized {
 
 	   public:
 		LockGuard(T& value, std::mutex& mutex) : lock_(mutex), value_(value) {}
-		T* operator->() const { return &value_; }
+		T* operator->() { return &value_; }
 		T& operator*() { return value_; }
 	};
 	class ConstLockGuard {
@@ -135,6 +135,15 @@ class Synchronized {
 		const T& operator*() const { return value_; }
 	};
 	LockGuard lock() { return LockGuard(value_, mutex_); }
+	ConstLockGuard lock() const { return ConstLockGuard(value_, mutex_); }
+	template <typename F>
+	decltype(auto) withLock(F&& func) {
+		return std::forward<F>(func)(lock());
+	}
+	template <typename F>
+	decltype(auto) withLock(F&& func) const {
+		return std::forward<F>(func)(lock());
+	}
 };
 
 enum class ShellType {
@@ -309,6 +318,12 @@ static bool parseSecondsArg(const char* arg, double& out) {
 	out = tmp;
 	return true;
 }
+struct LastExcutionInfo {
+	std::chrono::time_point<std::chrono::steady_clock> begin;
+	std::chrono::time_point<std::chrono::steady_clock> end;
+	std::string commandOutput;
+	int exitCode;
+};
 }  // namespace watch
 int main(int argc, char* argv[]) {
 	using namespace ftxui;
@@ -394,13 +409,11 @@ int main(int argc, char* argv[]) {
 	static std::sig_atomic_t stopRequested = 0;
 	std::signal(SIGINT, [](int) { stopRequested = 1; });
 	auto screen = ScreenInteractive::Fullscreen();
-	std::string latestCommandOutput_{};
-	int lastExitCode_ = 0;
-	std::mutex dataMutex;
+	// std::mutex dataMutex;
 	std::atomic<bool> loopStarted{false}, manualRefreshRequested{false};
+	// std::atomic<int> lastExitCode{0};
 	std::condition_variable cv;
-	std::chrono::time_point<std::chrono::steady_clock> lastBeginTime_,
-		lastFinishTime_;
+	watch::Synchronized<watch::LastExcutionInfo> lastExecutionInfo;
 	std::thread refreshThread([&]() {
 		while (!loopStarted.load(std::memory_order_acquire) &&
 			   stopRequested == 0) {
@@ -415,11 +428,13 @@ int main(int argc, char* argv[]) {
 			auto result = watch::executeInShell(command, shellType);
 			auto finish = std::chrono::steady_clock::now();
 			{
-				std::lock_guard<std::mutex> lock(dataMutex);
-				latestCommandOutput_ = result.output;
-				lastExitCode_ = result.exitCode;
-				lastBeginTime_ = begin;
-				lastFinishTime_ = finish;
+				// std::lock_guard<std::mutex> lock(dataMutex);
+				lastExecutionInfo.withLock([&](auto data) {
+					data->begin = begin;
+					data->end = finish;
+					data->commandOutput = std::move(result.output);
+					data->exitCode = result.exitCode;
+				});
 			}
 			screen.PostEvent(Event::Custom);
 			if (enableBeep && result.exitCode != 0) {
@@ -441,15 +456,14 @@ int main(int argc, char* argv[]) {
 				return separatorEmpty();
 			}
 			loopStarted.store(true, std::memory_order_release);
-			std::string cmdOutput;
-			int exitCode;
+			const auto lastExecutionInfo_locked = *lastExecutionInfo.lock();
 			double durationSec;
 			{
-				std::lock_guard<std::mutex> lock(dataMutex);
-				cmdOutput = latestCommandOutput_;
-				exitCode = lastExitCode_;
+				// std::lock_guard<std::mutex> lock(dataMutex);
+
 				durationSec = std::chrono::duration<double>(
-								  lastFinishTime_ - lastBeginTime_
+								  lastExecutionInfo_locked.end -
+								  lastExecutionInfo_locked.begin
 				)
 								  .count();
 			}
@@ -464,13 +478,17 @@ int main(int argc, char* argv[]) {
 						}
 					)
 				),
-				text(std::format("in {:.3f}s ({})", durationSec, exitCode)) |
-					align_right
+				text(
+					std::format(
+						"in {:.3f}s ({})", durationSec,
+						lastExecutionInfo_locked.exitCode
+					)
+				) | align_right
 			});
 			auto header{vbox({
 				hbox({text(message), filler(), header_right}),
 			})};
-			return vbox({header, text(cmdOutput)});
+			return vbox({header, text(lastExecutionInfo_locked.commandOutput)});
 		}),
 		[&](Event event) {
 			if (event == Event::Character('q')) {
