@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdlib>
 #include <exception>
@@ -18,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -101,6 +103,39 @@ const std::string joinArguments(const int argc, const char* const argv[]) {
 	}
 	return result;
 }
+
+template <typename T>
+class Synchronized {
+   private:
+	T value_;
+	mutable std::mutex mutex_;
+
+   public:
+	template <typename... Args>
+	Synchronized(Args&&... args) : value_(std::forward<Args>(args)...) {}
+	class LockGuard {
+	   private:
+		std::unique_lock<std::mutex> lock_;
+		T& value_;
+
+	   public:
+		LockGuard(T& value, std::mutex& mutex) : lock_(mutex), value_(value) {}
+		T* operator->() const { return &value_; }
+		T& operator*() { return value_; }
+	};
+	class ConstLockGuard {
+	   private:
+		std::unique_lock<std::mutex> lock_;
+		const T& value_;
+
+	   public:
+		ConstLockGuard(const T& value, std::mutex& mutex)
+			: lock_(mutex), value_(value) {}
+		const T* operator->() const { return &value_; }
+		const T& operator*() const { return value_; }
+	};
+	LockGuard lock() { return LockGuard(value_, mutex_); }
+};
 
 enum class ShellType {
 	CMD,
@@ -275,8 +310,6 @@ static bool parseSecondsArg(const char* arg, double& out) {
 	return true;
 }
 }  // namespace watch
-
-static std::sig_atomic_t stop_requested = 0;
 int main(int argc, char* argv[]) {
 	using namespace ftxui;
 	bool enableBeep{false};
@@ -358,27 +391,26 @@ int main(int argc, char* argv[]) {
 		std::atexit([]() { timeEndPeriod(1); });
 	}
 #endif
-	std::signal(SIGINT, [](int) { stop_requested = 1; });
-
+	static std::sig_atomic_t stopRequested = 0;
+	std::signal(SIGINT, [](int) { stopRequested = 1; });
 	auto screen = ScreenInteractive::Fullscreen();
-
 	std::string latestCommandOutput_{};
 	int lastExitCode_ = 0;
 	std::mutex dataMutex;
-	std::atomic<bool> loop_started{false};
+	std::atomic<bool> loopStarted{false}, manualRefreshRequested{false};
+	std::condition_variable cv;
 	std::chrono::time_point<std::chrono::steady_clock> lastBeginTime_,
 		lastFinishTime_;
 	std::thread refreshThread([&]() {
-		while (!loop_started.load(std::memory_order_acquire) &&
-			   stop_requested == 0) {
+		while (!loopStarted.load(std::memory_order_acquire) &&
+			   stopRequested == 0) {
 			std::this_thread::sleep_for(1ms);
 		}
-		if (stop_requested) {
+		if (stopRequested) {
 			screen.ExitLoopClosure()();
-			return;
 		}
 		int count{1};
-		while (stop_requested == 0) {
+		while (stopRequested == 0) {
 			auto begin = std::chrono::steady_clock::now();
 			auto result = watch::executeInShell(command, shellType);
 			auto finish = std::chrono::steady_clock::now();
@@ -400,45 +432,62 @@ int main(int argc, char* argv[]) {
 			}
 			++count;
 		}
-		screen.ExitLoopClosure()();
+		return;
 	});
-	screen.Loop(Renderer([&]() {
-		if (stop_requested) {
-			screen.ExitLoopClosure()();
-			return text("Exiting...");
-		}
-		loop_started.store(true, std::memory_order_release);
-		std::string cmdOutput;
-		int exitCode;
-		double durationSec;
-		{
-			std::lock_guard<std::mutex> lock(dataMutex);
-			cmdOutput = latestCommandOutput_;
-			exitCode = lastExitCode_;
-			durationSec =
-				std::chrono::duration<double>(lastFinishTime_ - lastBeginTime_)
-					.count();
-		}
-		auto header_right = vbox({
-
-			text(
-				std::format(
-					"{:L%c}",
-					std::chrono::zoned_time{
-						std::chrono::current_zone(),
-						std::chrono::system_clock::now()
-					}
+	screen.Loop(CatchEvent(
+		Renderer([&]() {
+			if (stopRequested) {
+				screen.ExitLoopClosure()();
+				return separatorEmpty();
+			}
+			loopStarted.store(true, std::memory_order_release);
+			std::string cmdOutput;
+			int exitCode;
+			double durationSec;
+			{
+				std::lock_guard<std::mutex> lock(dataMutex);
+				cmdOutput = latestCommandOutput_;
+				exitCode = lastExitCode_;
+				durationSec = std::chrono::duration<double>(
+								  lastFinishTime_ - lastBeginTime_
 				)
-			),
-			text(std::format("in {:.3f}s ({})", durationSec, exitCode)) |
-				align_right
-		});
+								  .count();
+			}
+			auto header_right = vbox({
 
-		auto header{vbox({
-			hbox({text(message), filler(), header_right}),
-		})};
-		return vbox({header, text(cmdOutput)});
-	}));
+				text(
+					std::format(
+						"{:L%c}",
+						std::chrono::zoned_time{
+							std::chrono::current_zone(),
+							std::chrono::system_clock::now()
+						}
+					)
+				),
+				text(std::format("in {:.3f}s ({})", durationSec, exitCode)) |
+					align_right
+			});
+			auto header{vbox({
+				hbox({text(message), filler(), header_right}),
+			})};
+			return vbox({header, text(cmdOutput)});
+		}),
+		[&](Event event) {
+			if (event == Event::Character('q')) {
+				stopRequested = true;
+				return true;
+			}
+			if (event == Event::Character(' ')) {
+				manualRefreshRequested = true;
+				return true;
+			}
+			if (event == Event::Escape) {
+				stopRequested = true;
+				return true;
+			}
+			return false;
+		}
+	));
 	if (refreshThread.joinable()) {
 		refreshThread.join();
 	}
