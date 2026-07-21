@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
 #include <format>
 #include <iostream>
@@ -467,24 +468,21 @@ int main(int argc, char* argv[]) {
 				)
 								  .count();
 			}
-			auto header_right = vbox({
-
-				text(
-					std::format(
-						"{:L%c}",
-						std::chrono::zoned_time{
-							std::chrono::current_zone(),
-							std::chrono::system_clock::now()
-						}
-					)
-				),
-				text(
-					std::format(
-						"in {:.3f}s ({})", durationSec,
-						lastExecutionInfo_locked.exitCode
-					)
-				) | align_right
-			});
+			auto header_right = vbox(
+				{text([]() {
+					 auto now = std::time(nullptr);
+					 auto tm = *std::localtime(&now);
+					 char time_buf[100];
+					 std::strftime(time_buf, sizeof(time_buf), "%c", &tm);
+					 return std::string{time_buf};
+				 }()),
+				 text(
+					 std::format(
+						 "in {:.3f}s ({})", durationSec,
+						 lastExecutionInfo_locked.exitCode
+					 )
+				 ) | align_right}
+			);
 			auto header{vbox({
 				hbox({text(message), filler(), header_right}),
 			})};
