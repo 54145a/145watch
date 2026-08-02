@@ -8,11 +8,13 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 find_package(ftxui CONFIG REQUIRED)
+find_package(argparse CONFIG REQUIRED)
 add_executable(${PROJECT_NAME} main.cpp .clang-format README.md vcpkg.json)
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     WATCH_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE ftxui::dom ftxui::component ftxui::screen)
+target_link_libraries(${PROJECT_NAME} PRIVATE argparse::argparse)
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE winmm)
 endif()

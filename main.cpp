@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -22,7 +21,9 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
+#include <argparse/argparse.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -47,48 +48,6 @@ using namespace std::literals;
 #endif
 namespace watch {
 constexpr std::string_view VERSION{WATCH_PROJECT_VERSION};
-
-using Option = std::array<std::string_view, 2>;
-constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
-constexpr Option INTERVAL_OPTIONS{"-n", "--interval"};
-constexpr Option BEEP_OPTIONS{"-b", "--beep"};
-constexpr Option HELP_OPTIONS{"-h", "--help"};
-constexpr Option VERSION_OPTIONS{"-v", "--version"};
-constexpr std::string joinOptions(Option options) {
-	/*return std::views::join_with(options, ", ") |
-		   std::ranges::to<std::string>();**/
-	return std::string(options[0]) + ", " + std::string(options[1]);
-}
-
-const std::string HELP_INFO{
-	std::format(R"(Usage: watch [options] (<command> | false)
-Options:
-	{} beep if command has a non-zero exit
-	{} <seconds> seconds to wait between updates, minimum is 0.1
-	{} run command in precise intervals
-
-{} show help and exit
-{} show version info and exit
-)",
-				joinOptions(BEEP_OPTIONS), joinOptions(INTERVAL_OPTIONS),
-				joinOptions(PRECISE_OPTIONS), joinOptions(HELP_OPTIONS),
-				joinOptions(VERSION_OPTIONS))};
-void showHelp() { std::print("{}", HELP_INFO); }
-void showHelpAndExit(int status = 0) {
-	showHelp();
-	std::exit(status);
-}
-
-/*const std::string joinArguments(const int argc, const char* const argv[]) {
-	return std::views::counted(argv, argc) |
-		   std::views::transform([](const char* arg) {
-			   return std::string_view{arg}.contains(' ')
-						  ? std::format("\"{}\"", arg)
-						  : std::string{arg};
-		   }) |
-		   std::views::join_with(std::string_view{" "}) |
-		   std::ranges::to<std::string>();
-}*/
 
 const std::string joinArguments(const int argc, const char* const argv[]) {
 	std::ostringstream oss;
@@ -331,76 +290,81 @@ int main(int argc, char* argv[]) {
 	using namespace ftxui;
 	bool enableBeep{false};
 	bool isPrecise{false};
-	int index{1};
 	auto interval{2000ms};
+	std::vector<std::string> commandTokens;
+	argparse::ArgumentParser program{
+		"watch", std::format("145watch by 145a {}", watch::VERSION)};
 	try {
-		while (index < argc) {
-			if (argv[index][0] != '-') break;
-			const auto equalToThisArg{
-				[&](std::string_view s) { return s == argv[index]; }};
-			if (std::ranges::any_of(watch::HELP_OPTIONS, equalToThisArg)) {
-				watch::showHelpAndExit();
-			} else if (std::ranges::any_of(watch::VERSION_OPTIONS,
-										   equalToThisArg)) {
-				std::println("145watch by 145a {}", watch::VERSION);
-				return 0;
-			} else if (std::ranges::any_of(watch::PRECISE_OPTIONS,
-										   equalToThisArg)) {
-				isPrecise = true;
-			} else if (std::ranges::any_of(watch::INTERVAL_OPTIONS,
-										   equalToThisArg)) {
-				index++;
-				if (index >= argc) {
-					std::println(
-						"Interval option "
-						"requires an argument.");
-					watch::showHelpAndExit();
-				}
-				const char* arg = argv[index];
-				double seconds{};
-				if (!watch::parseSecondsArg(arg, seconds)) {
-					throw std::invalid_argument{"Invalid interval."};
-				}
+		program.add_argument("-b", "--beep")
+			.help("beep if command has a non-zero exit")
+			.default_value(false)
+			.implicit_value(true)
+			.nargs(0);
+		program.add_argument("-n", "--interval")
+			.metavar("<seconds>")
+			.help("seconds to wait between updates, minimum is 0.1");
+		program.add_argument("-p", "--precise")
+			.help("run command in precise intervals")
+			.default_value(false)
+			.implicit_value(true)
+			.nargs(0);
+		program.add_argument("command")
+			.remaining()
+			.metavar("<command>")
+			.help("command to execute");
 
-				using ms = std::chrono::milliseconds;
-				const long double max_seconds =
-					static_cast<long double>(
-						std::numeric_limits<ms::rep>::max()) /
-					1000.0L;
-				if (static_cast<long double>(seconds) > max_seconds) {
-					throw std::range_error{
-						"Interval tooooooooo "
-						"large (would "
-						"overflow)."};
-				}
-				auto dur = std::chrono::duration<double>(seconds);
-				auto msec = std::chrono::duration_cast<ms>(
-					dur + std::chrono::microseconds(500));
-				if (msec.count() < 100)
-					throw std::range_error{"Interval too small."};
-				interval = msec;
-			} else if (std::ranges::any_of(watch::BEEP_OPTIONS,
-										   equalToThisArg)) {
-				enableBeep = true;
-			} else
-				throw std::invalid_argument(
-					std::format("Unknown option: {}", argv[index]));
-			index++;
+		program.parse_args(argc, argv);
+
+		isPrecise = program.get<bool>("--precise");
+		enableBeep = program.get<bool>("--beep");
+
+		if (auto arg = program.present<std::string>("--interval")) {
+			double seconds{};
+			if (!watch::parseSecondsArg(arg->c_str(), seconds)) {
+				throw std::invalid_argument{"Invalid interval."};
+			}
+			using ms = std::chrono::milliseconds;
+			const long double max_seconds =
+				static_cast<long double>(
+					std::numeric_limits<ms::rep>::max()) /
+				1000.0L;
+			if (static_cast<long double>(seconds) > max_seconds) {
+				throw std::range_error{
+					"Interval tooooooooo "
+					"large (would "
+					"overflow)."};
+			}
+			auto dur = std::chrono::duration<double>(seconds);
+			auto msec = std::chrono::duration_cast<ms>(
+				dur + std::chrono::microseconds(500));
+			if (msec.count() < 100)
+				throw std::range_error{"Interval too small."};
+			interval = msec;
+		}
+
+		if (auto cmd = program.present<std::vector<std::string>>("command")) {
+			commandTokens = std::move(*cmd);
 		}
 	} catch (const std::exception& e) {
 		std::println("Error: {}", e.what());
-		watch::showHelpAndExit(1);
+		std::cout << program << std::endl;
+		return 1;
 	}
-	if (index == argc) watch::showHelpAndExit();
+	if (commandTokens.empty()) {
+		std::cout << program << std::endl;
+		return 0;
+	}
 
 	const watch::ShellType shellType = watch::detectShell();
 	std::println("Shell type: {}", static_cast<int>(shellType));
 
-	const std::string command{watch::joinArguments(argc - index, argv + index)};
+	const std::string command{watch::joinArguments(
+		static_cast<int>(commandTokens.size()),
+		argv + (argc - static_cast<int>(commandTokens.size())))};
 	const std::string message{
 		std::format("Every {}s: {} ",
 					static_cast<float>(interval.count()) / 1000, command)};
-	const auto start{std::chrono::steady_clock::now()};
+	auto start{std::chrono::steady_clock::now()};
 
 #ifdef _WIN32
 	if (isPrecise) {
@@ -474,7 +438,9 @@ int main(int argc, char* argv[]) {
 					 auto now = std::time(nullptr);
 					 auto tm = *std::localtime(&now);
 					 char time_buf[100];
-					 std::strftime(time_buf, sizeof(time_buf), "%c", &tm);
+					 std::strftime(
+						 time_buf, sizeof(time_buf), "%c", &tm
+					 );	 // Use ctime for Termux compatibility
 					 return std::string{time_buf};
 				 }()),
 				 text(

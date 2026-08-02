@@ -2,3 +2,5 @@ CMakeCache.txt
 CMakeFiles
 build/
 .cache
+vcpkg_installed
+qtcreator
