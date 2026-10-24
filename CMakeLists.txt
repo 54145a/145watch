@@ -3,6 +3,14 @@ project(145watch LANGUAGES CXX VERSION 1.5.0)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_EXTENSIONS off)
 if (MSVC)
+    # vcpkg's toolchain only applies the triplet's CRT linkage to the ports
+    # it builds, not to this project. Match it here, or linking a -static
+    # triplet fails with LNK2038 (MT_StaticRelease vs MD_DynamicRelease).
+    if(VCPKG_TARGET_TRIPLET MATCHES "-static$")
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    else()
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
     add_compile_options(/W3)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
