@@ -6,7 +6,7 @@ if (MSVC)
     # vcpkg's toolchain only applies the triplet's CRT linkage to the ports
     # it builds, not to this project. Match it here, or linking a -static
     # triplet fails with LNK2038 (MT_StaticRelease vs MD_DynamicRelease).
-    if(VCPKG_TARGET_TRIPLET MATCHES "-static$")
+    if(VCPKG_TARGET_TRIPLET MATCHES "static")
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     else()
         set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")

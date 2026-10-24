@@ -23,7 +23,7 @@ jobs:
           cmake -B ${{github.workspace}}/build
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-release
 
       - name: Build
         run: cmake --build ${{github.workspace}}/build --config Release
