@@ -2,8 +2,12 @@ name: Build
 
 on:
   push:
+    branches:
+      - main
+      - wip
     tags:
       - "v*.*"
+  pull_request:
 
 jobs:
   build:
@@ -12,28 +16,28 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
-      
+
       - name: Configure CMake
-        run: cmake -B ${{github.workspace}}/build --preset=vcpkg -DCMAKE_BUILD_TYPE=Release
+        run: >
+          cmake -B ${{github.workspace}}/build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
       - name: Build
         run: cmake --build ${{github.workspace}}/build --config Release
 
-      - name: List build output
-        shell: bash
-        run: find "${{github.workspace}}/build" -name "*.exe" -type f
-     
       - name: Upload Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           path: ${{github.workspace}}/build/*.exe
 
       - name: Release
-        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{github.workspace}}/build/*.exe
-

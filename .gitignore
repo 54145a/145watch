@@ -3,4 +3,4 @@ CMakeFiles
 build/
 .cache
 vcpkg_installed
-qtcreator
+.qtcreator/
