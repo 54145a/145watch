@@ -1,10 +1,12 @@
 #include <algorithm>
-#include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
 #include <format>
 #include <iostream>
@@ -18,7 +20,10 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
+#include <argparse/argparse.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -44,48 +49,6 @@ using namespace std::literals;
 namespace watch {
 constexpr std::string_view VERSION{WATCH_PROJECT_VERSION};
 
-using Option = std::array<std::string_view, 2>;
-constexpr Option PRECISE_OPTIONS{"-p", "--precise"};
-constexpr Option INTERVAL_OPTIONS{"-n", "--interval"};
-constexpr Option BEEP_OPTIONS{"-b", "--beep"};
-constexpr Option HELP_OPTIONS{"-h", "--help"};
-constexpr Option VERSION_OPTIONS{"-v", "--version"};
-constexpr std::string joinOptions(Option options) {
-	/*return std::views::join_with(options, ", ") |
-		   std::ranges::to<std::string>();**/
-	return std::string(options[0]) + ", " + std::string(options[1]);
-}
-
-const std::string HELP_INFO{
-	std::format(R"(Usage: watch [options] (<command> | false)
-Options:
-	{} beep if command has a non-zero exit
-	{} <seconds> seconds to wait between updates, minimum is 0.1
-	{} run command in precise intervals
-
-{} show help and exit
-{} show version info and exit
-)",
-				joinOptions(BEEP_OPTIONS), joinOptions(INTERVAL_OPTIONS),
-				joinOptions(PRECISE_OPTIONS), joinOptions(HELP_OPTIONS),
-				joinOptions(VERSION_OPTIONS))};
-void showHelp() { std::print("{}", HELP_INFO); }
-void showHelpAndExit(int status = 0) {
-	showHelp();
-	std::exit(status);
-}
-
-/*const std::string joinArguments(const int argc, const char* const argv[]) {
-	return std::views::counted(argv, argc) |
-		   std::views::transform([](const char* arg) {
-			   return std::string_view{arg}.contains(' ')
-						  ? std::format("\"{}\"", arg)
-						  : std::string{arg};
-		   }) |
-		   std::views::join_with(std::string_view{" "}) |
-		   std::ranges::to<std::string>();
-}*/
-
 const std::string joinArguments(const int argc, const char* const argv[]) {
 	std::ostringstream oss;
 	std::ranges::copy(std::views::counted(argv, argc) |
@@ -101,6 +64,48 @@ const std::string joinArguments(const int argc, const char* const argv[]) {
 	}
 	return result;
 }
+
+template <typename T>
+class Synchronized {
+   private:
+	T value_;
+	mutable std::mutex mutex_;
+
+   public:
+	template <typename... Args>
+	Synchronized(Args&&... args) : value_(std::forward<Args>(args)...) {}
+	class LockGuard {
+	   private:
+		std::unique_lock<std::mutex> lock_;
+		T& value_;
+
+	   public:
+		LockGuard(T& value, std::mutex& mutex) : lock_(mutex), value_(value) {}
+		T* operator->() { return &value_; }
+		T& operator*() { return value_; }
+	};
+	class ConstLockGuard {
+	   private:
+		std::unique_lock<std::mutex> lock_;
+		const T& value_;
+
+	   public:
+		ConstLockGuard(const T& value, std::mutex& mutex)
+			: lock_(mutex), value_(value) {}
+		const T* operator->() const { return &value_; }
+		const T& operator*() const { return value_; }
+	};
+	LockGuard lock() { return LockGuard(value_, mutex_); }
+	ConstLockGuard lock() const { return ConstLockGuard(value_, mutex_); }
+	template <typename F>
+	decltype(auto) withLock(F&& func) {
+		return std::forward<F>(func)(lock());
+	}
+	template <typename F>
+	decltype(auto) withLock(F&& func) const {
+		return std::forward<F>(func)(lock());
+	}
+};
 
 enum class ShellType {
 	CMD,
@@ -274,83 +279,92 @@ static bool parseSecondsArg(const char* arg, double& out) {
 	out = tmp;
 	return true;
 }
+struct LastExcutionInfo {
+	std::chrono::time_point<std::chrono::steady_clock> begin;
+	std::chrono::time_point<std::chrono::steady_clock> end;
+	std::string commandOutput;
+	int exitCode;
+};
 }  // namespace watch
-
-static std::sig_atomic_t stop_requested = 0;
 int main(int argc, char* argv[]) {
 	using namespace ftxui;
 	bool enableBeep{false};
 	bool isPrecise{false};
-	int index{1};
 	auto interval{2000ms};
+	std::vector<std::string> commandTokens;
+	argparse::ArgumentParser program{
+		"watch", std::format("145watch by 145a {}", watch::VERSION)};
 	try {
-		while (index < argc) {
-			if (argv[index][0] != '-') break;
-			const auto equalToThisArg{
-				[&](std::string_view s) { return s == argv[index]; }};
-			if (std::ranges::any_of(watch::HELP_OPTIONS, equalToThisArg)) {
-				watch::showHelpAndExit();
-			} else if (std::ranges::any_of(watch::VERSION_OPTIONS,
-										   equalToThisArg)) {
-				std::println("145watch by 145a {}", watch::VERSION);
-				return 0;
-			} else if (std::ranges::any_of(watch::PRECISE_OPTIONS,
-										   equalToThisArg)) {
-				isPrecise = true;
-			} else if (std::ranges::any_of(watch::INTERVAL_OPTIONS,
-										   equalToThisArg)) {
-				index++;
-				if (index >= argc) {
-					std::println(
-						"Interval option "
-						"requires an argument.");
-					watch::showHelpAndExit();
-				}
-				const char* arg = argv[index];
-				double seconds{};
-				if (!watch::parseSecondsArg(arg, seconds)) {
-					throw std::invalid_argument{"Invalid interval."};
-				}
+		program.add_argument("-b", "--beep")
+			.help("beep if command has a non-zero exit")
+			.default_value(false)
+			.implicit_value(true)
+			.nargs(0);
+		program.add_argument("-n", "--interval")
+			.metavar("<seconds>")
+			.help("seconds to wait between updates, minimum is 0.1");
+		program.add_argument("-p", "--precise")
+			.help("run command in precise intervals")
+			.default_value(false)
+			.implicit_value(true)
+			.nargs(0);
+		program.add_argument("command")
+			.remaining()
+			.metavar("<command>")
+			.help("command to execute");
 
-				using ms = std::chrono::milliseconds;
-				const long double max_seconds =
-					static_cast<long double>(
-						std::numeric_limits<ms::rep>::max()) /
-					1000.0L;
-				if (static_cast<long double>(seconds) > max_seconds) {
-					throw std::range_error{
-						"Interval tooooooooo "
-						"large (would "
-						"overflow)."};
-				}
-				auto dur = std::chrono::duration<double>(seconds);
-				auto msec = std::chrono::duration_cast<ms>(
-					dur + std::chrono::microseconds(500));
-				if (msec.count() < 100)
-					throw std::range_error{"Interval too small."};
-				interval = msec;
-			} else if (std::ranges::any_of(watch::BEEP_OPTIONS,
-										   equalToThisArg)) {
-				enableBeep = true;
-			} else
-				throw std::invalid_argument(
-					std::format("Unknown option: {}", argv[index]));
-			index++;
+		program.parse_args(argc, argv);
+
+		isPrecise = program.get<bool>("--precise");
+		enableBeep = program.get<bool>("--beep");
+
+		if (auto arg = program.present<std::string>("--interval")) {
+			double seconds{};
+			if (!watch::parseSecondsArg(arg->c_str(), seconds)) {
+				throw std::invalid_argument{"Invalid interval."};
+			}
+			using ms = std::chrono::milliseconds;
+			const long double max_seconds =
+				static_cast<long double>(
+					std::numeric_limits<ms::rep>::max()) /
+				1000.0L;
+			if (static_cast<long double>(seconds) > max_seconds) {
+				throw std::range_error{
+					"Interval tooooooooo "
+					"large (would "
+					"overflow)."};
+			}
+			auto dur = std::chrono::duration<double>(seconds);
+			auto msec = std::chrono::duration_cast<ms>(
+				dur + std::chrono::microseconds(500));
+			if (msec.count() < 100)
+				throw std::range_error{"Interval too small."};
+			interval = msec;
+		}
+
+		if (auto cmd = program.present<std::vector<std::string>>("command")) {
+			commandTokens = std::move(*cmd);
 		}
 	} catch (const std::exception& e) {
 		std::println("Error: {}", e.what());
-		watch::showHelpAndExit(1);
+		std::cout << program << std::endl;
+		return 1;
 	}
-	if (index == argc) watch::showHelpAndExit();
+	if (commandTokens.empty()) {
+		std::cout << program << std::endl;
+		return 0;
+	}
 
 	const watch::ShellType shellType = watch::detectShell();
 	std::println("Shell type: {}", static_cast<int>(shellType));
 
-	const std::string command{watch::joinArguments(argc - index, argv + index)};
+	const std::string command{watch::joinArguments(
+		static_cast<int>(commandTokens.size()),
+		argv + (argc - static_cast<int>(commandTokens.size())))};
 	const std::string message{
 		std::format("Every {}s: {} ",
 					static_cast<float>(interval.count()) / 1000, command)};
-	const auto start{std::chrono::steady_clock::now()};
+	auto start{std::chrono::steady_clock::now()};
 
 #ifdef _WIN32
 	if (isPrecise) {
@@ -358,36 +372,35 @@ int main(int argc, char* argv[]) {
 		std::atexit([]() { timeEndPeriod(1); });
 	}
 #endif
-	std::signal(SIGINT, [](int) { stop_requested = 1; });
-
+	static std::sig_atomic_t stopRequested = 0;
+	std::signal(SIGINT, [](int) { stopRequested = 1; });
 	auto screen = ScreenInteractive::Fullscreen();
-
-	std::string latestCommandOutput_{};
-	int lastExitCode_ = 0;
-	std::mutex dataMutex;
-	std::atomic<bool> loop_started{false};
-	std::chrono::time_point<std::chrono::steady_clock> lastBeginTime_,
-		lastFinishTime_;
+	// std::mutex dataMutex;
+	std::atomic<bool> loopStarted{false}, manualRefreshRequested{false};
+	// std::atomic<int> lastExitCode{0};
+	std::condition_variable cv;
+	watch::Synchronized<watch::LastExcutionInfo> lastExecutionInfo;
 	std::thread refreshThread([&]() {
-		while (!loop_started.load(std::memory_order_acquire) &&
-			   stop_requested == 0) {
+		while (!loopStarted.load(std::memory_order_acquire) &&
+			   stopRequested == 0) {
 			std::this_thread::sleep_for(1ms);
 		}
-		if (stop_requested) {
+		if (stopRequested) {
 			screen.ExitLoopClosure()();
-			return;
 		}
 		int count{1};
-		while (stop_requested == 0) {
+		while (stopRequested == 0) {
 			auto begin = std::chrono::steady_clock::now();
 			auto result = watch::executeInShell(command, shellType);
 			auto finish = std::chrono::steady_clock::now();
 			{
-				std::lock_guard<std::mutex> lock(dataMutex);
-				latestCommandOutput_ = result.output;
-				lastExitCode_ = result.exitCode;
-				lastBeginTime_ = begin;
-				lastFinishTime_ = finish;
+				// std::lock_guard<std::mutex> lock(dataMutex);
+				lastExecutionInfo.withLock([&](auto data) {
+					data->begin = begin;
+					data->end = finish;
+					data->commandOutput = std::move(result.output);
+					data->exitCode = result.exitCode;
+				});
 			}
 			screen.PostEvent(Event::Custom);
 			if (enableBeep && result.exitCode != 0) {
@@ -400,45 +413,64 @@ int main(int argc, char* argv[]) {
 			}
 			++count;
 		}
-		screen.ExitLoopClosure()();
+		return;
 	});
-	screen.Loop(Renderer([&]() {
-		if (stop_requested) {
-			screen.ExitLoopClosure()();
-			return text("Exiting...");
-		}
-		loop_started.store(true, std::memory_order_release);
-		std::string cmdOutput;
-		int exitCode;
-		double durationSec;
-		{
-			std::lock_guard<std::mutex> lock(dataMutex);
-			cmdOutput = latestCommandOutput_;
-			exitCode = lastExitCode_;
-			durationSec =
-				std::chrono::duration<double>(lastFinishTime_ - lastBeginTime_)
-					.count();
-		}
-		auto header_right = vbox({
+	screen.Loop(CatchEvent(
+		Renderer([&]() {
+			if (stopRequested) {
+				screen.ExitLoopClosure()();
+				return separatorEmpty();
+			}
+			loopStarted.store(true, std::memory_order_release);
+			const auto lastExecutionInfo_locked = *lastExecutionInfo.lock();
+			double durationSec;
+			{
+				// std::lock_guard<std::mutex> lock(dataMutex);
 
-			text(
-				std::format(
-					"{:L%c}",
-					std::chrono::zoned_time{
-						std::chrono::current_zone(),
-						std::chrono::system_clock::now()
-					}
+				durationSec = std::chrono::duration<double>(
+								  lastExecutionInfo_locked.end -
+								  lastExecutionInfo_locked.begin
 				)
-			),
-			text(std::format("in {:.3f}s ({})", durationSec, exitCode)) |
-				align_right
-		});
-
-		auto header{vbox({
-			hbox({text(message), filler(), header_right}),
-		})};
-		return vbox({header, text(cmdOutput)});
-	}));
+								  .count();
+			}
+			auto header_right = vbox(
+				{text([]() {
+					 auto now = std::time(nullptr);
+					 auto tm = *std::localtime(&now);
+					 char time_buf[100];
+					 std::strftime(
+						 time_buf, sizeof(time_buf), "%c", &tm
+					 );	 // Use ctime for Termux compatibility
+					 return std::string{time_buf};
+				 }()),
+				 text(
+					 std::format(
+						 "in {:.3f}s ({})", durationSec,
+						 lastExecutionInfo_locked.exitCode
+					 )
+				 ) | align_right}
+			);
+			auto header{vbox({
+				hbox({text(message), filler(), header_right}),
+			})};
+			return vbox({header, text(lastExecutionInfo_locked.commandOutput)});
+		}),
+		[&](Event event) {
+			if (event == Event::Character('q')) {
+				stopRequested = true;
+				return true;
+			}
+			if (event == Event::Character(' ')) {
+				manualRefreshRequested = true;
+				return true;
+			}
+			if (event == Event::Escape) {
+				stopRequested = true;
+				return true;
+			}
+			return false;
+		}
+	));
 	if (refreshThread.joinable()) {
 		refreshThread.join();
 	}
