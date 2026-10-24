@@ -34,7 +34,7 @@ In the TUI, press `q` or `Esc` to quit.
 
 ### Build
 
-Requires [vcpkg](https://learn.microsoft.com/en-us/vcpkg/get_started/get-started) and CMake 3.10+.
+Requires [vcpkg](https://learn.microsoft.com/en-us/vcpkg/get_started/get-started) and CMake 3.15+.
 
 ```shell
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
